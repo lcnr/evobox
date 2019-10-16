@@ -13,84 +13,58 @@ use core::{
 
 use alloc::alloc::{self as a, Layout};
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct N<E, T> {
-    _marker: PhantomData<(E, T)>,
-}
+pub mod traits;
 
-unsafe impl TypeList for () {
-    fn size() -> usize {
-        0
-    }
+use traits::List;
 
-    fn align() -> usize {
-        1
-    }
-}
-
-unsafe impl<E, T: TypeList> TypeList for N<E, T> {
-    fn size() -> usize {
-        mem::size_of::<E>().max(T::size())
-    }
-
-    fn align() -> usize {
-        mem::align_of::<E>().max(T::align())
-    }
-}
-
-pub unsafe trait TypeList {
-    fn size() -> usize;
-
-    fn align() -> usize;
+pub struct L<E, C = ()> {
+    _marker: PhantomData<fn(E, C)>,
 }
 
 /// A pointer type which allows for safe transformations of its content without reallocation.
 ///
-/// An `EvolveBox<P, C, N>` has the same size as a `Box<T>` and has exactly
+/// An `EvolveBox` has the same size as a `Box` and has exactly
 /// the same size and alignment on the heap as its largest possible variant.
 ///
-/// As the size and alignment of the allocated memory are required for deallocation.
-/// This information is stored in the type signature across transformations.
-/// All previous types are stored in `P` and all future types in `N`.
-///
-/// # Type parameters
-///
-/// - `C`: The type of the currently stored value
-/// - `P`: A list of all previously used types
-/// - `N`: A list of all possible future types
-///
-/// A list segment `L` of both `P` and `N` is either `N<T, L>` or `()`.
+/// The size and alignment of the allocated memory are required for deallocation.
+/// This information is stored in the type `S`, which is a list of all used types.
 ///
 /// # Examples
 ///
 /// ```rust
+/// use evobox::{EvolveBox, L};
 ///
+/// let s: EvolveBox<L<&str, L<String, L<u32>>>> = EvolveBox::new("7");
+/// let owned = s.evolve(|v| v.to_string());
+/// assert_eq!(owned.as_str(), "7");
+///
+/// let seven = owned.try_evolve(|s| s.parse()).expect("invalid integer");
+/// assert_eq!(*seven, 7);
 /// ```
-pub struct EvolveBox<P: TypeList, C, N: TypeList> {
-    _marker: PhantomData<(*const P, N, *const C)>,
-    current: NonNull<C>,
+pub struct EvolveBox<S: List<P>, P = ()> {
+    _marker: PhantomData<fn(S, P)>,
+    current: NonNull<S::Value>,
 }
 
-unsafe impl<P: TypeList, C: Send, N: TypeList> Send for EvolveBox<P, C, N> {}
-unsafe impl<P: TypeList, C: Sync, N: TypeList> Sync for EvolveBox<P, C, N> {}
+unsafe impl<S: List<P>, P> Send for EvolveBox<S, P> where S::Value: Send {}
+unsafe impl<S: List<P>, P> Sync for EvolveBox<S, P> where S::Value: Sync {}
 
-impl<C, N: TypeList> EvolveBox<(), C, N> {
+impl<S: List<()>> EvolveBox<S, ()> {
     /// Allocates memory on the heap and then places `x` into it.
-    /// This does not actually allocate if all possible values `C` of this
-    /// `EvolveBox` are zero-sized.
+    /// This does not actually allocate if all types used in `S` are zero-sized.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// # use evobox::EvolveBox;
-    /// let value = EvolveBox::new(7).fin();
+    /// # use evobox::{EvolveBox, L};
+    /// let value = EvolveBox::<L<_>>::new(7);
     ///
     /// assert_eq!(*value, 7);
     /// ```
-    pub fn new(x: C) -> EvolveBox<(), C, N> {
+    pub fn new(x: S::Value) -> Self {
         if let Some(layout) = Self::calculate_layout() {
             unsafe {
-                let current: *mut C = a::alloc(layout).cast();
+                let current = a::alloc(layout).cast::<S::Value>();
                 if current.is_null() {
                     a::handle_alloc_error(layout);
                 }
@@ -110,10 +84,10 @@ impl<C, N: TypeList> EvolveBox<(), C, N> {
     }
 }
 
-impl<P: TypeList, C, N: TypeList> EvolveBox<P, C, N> {
+impl<S: List<P>, P> EvolveBox<S, P> {
     fn calculate_layout() -> Option<Layout> {
-        let size = P::size().max(N::size()).max(mem::size_of::<C>());
-        let align = P::align().max(N::align()).max(mem::align_of::<C>());
+        let size = S::size();
+        let align = S::align();
         if size > 0 {
             debug_assert!(Layout::from_size_align(size, align).is_ok());
             unsafe { Some(Layout::from_size_align_unchecked(size, align)) }
@@ -127,11 +101,11 @@ impl<P: TypeList, C, N: TypeList> EvolveBox<P, C, N> {
     /// # Examples
     ///
     /// ```rust
-    /// # use evobox::EvolveBox;
-    /// let evolve_box = EvolveBox::new("hi").fin();
+    /// # use evobox::{EvolveBox, L};
+    /// let evolve_box = EvolveBox::<L<_>>::new("hi");
     /// assert_eq!("hi", evolve_box.into_inner());
     /// ```
-    pub fn into_inner(self) -> C {
+    pub fn into_inner(self) -> S::Value {
         let pointer = self.current.as_ptr();
         mem::forget(self);
         unsafe {
@@ -146,22 +120,23 @@ impl<P: TypeList, C, N: TypeList> EvolveBox<P, C, N> {
     }
 }
 
-impl<P: TypeList, C, V, R: TypeList> EvolveBox<P, C, N<V, R>> {
-    /// Converts a pointer of type `C` to a pointer of type `V`
-    /// without requiring a new allocation
+impl<S: List<P>, P> EvolveBox<S, P> {
+    /// Converts the current value to the next one
+    /// without requiring a new allocation.
     ///
     /// # Examples
     ///
     /// ```rust
-    /// # use evobox::EvolveBox;
+    /// # use evobox::{EvolveBox, L};
     ///
-    /// let int_box = EvolveBox::new(7);
-    /// let str_box = int_box.evolve(|i| format!("{}", i)).fin();
+    /// let int_box: EvolveBox<L<u32, L<String>>> = EvolveBox::new(7);
+    /// let str_box = int_box.evolve(|i| format!("{}", i));
     /// assert_eq!(str_box.as_str(), "7");
     /// ```
-    pub fn evolve<F>(self, f: F) -> EvolveBox<N<C, P>, V, R>
+    pub fn evolve<F>(self, f: F) -> EvolveBox<S, L<P>>
     where
-        F: FnOnce(C) -> V,
+        F: FnOnce(<S as List<P>>::Value) -> <S as List<L<P>>>::Value,
+        S: List<L<P>>,
     {
         let pointer = self.current;
         // SAFETY: prevent `self` from being dropped
@@ -174,7 +149,7 @@ impl<P: TypeList, C, V, R: TypeList> EvolveBox<P, C, N<V, R>> {
 
             // As the pointer data of `C` is now added to `P`, `calculate_layout`
             // does not change its return value
-            let mut pointer = pointer.cast::<V>();
+            let mut pointer = pointer.cast();
             ptr::write(pointer.as_mut(), next);
             EvolveBox {
                 _marker: PhantomData,
@@ -183,9 +158,28 @@ impl<P: TypeList, C, V, R: TypeList> EvolveBox<P, C, N<V, R>> {
         }
     }
 
-    pub fn try_evolve<F, E>(self, f: F) -> Result<EvolveBox<N<C, P>, V, R>, E>
+    /// Tries to convert the current value to the next one without
+    /// requiring a new allocation. The error is propagated outwards in case
+    /// the conversion fails.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use evobox::{EvolveBox, L};
+    /// use std::convert::TryFrom;
+    ///
+    /// let origin: EvolveBox<L<u32, L<u16, L<u8>>>> = EvolveBox::new(256);
+    ///
+    /// let success = origin.try_evolve(u16::try_from).unwrap();
+    /// assert_eq!(*success, 256);
+    ///
+    /// let error = success.try_evolve(u8::try_from);
+    /// assert!(error.is_err());
+    /// ```
+    pub fn try_evolve<F, E>(self, f: F) -> Result<EvolveBox<S, L<P>>, E>
     where
-        F: FnOnce(C) -> Result<V, E>,
+        F: FnOnce(<S as List<P>>::Value) -> Result<<S as List<L<P>>>::Value, E>,
+        S: List<L<P>>,
     {
         let pointer = self.current;
         // SAFETY: prevent `self` from being dropped
@@ -199,7 +193,7 @@ impl<P: TypeList, C, V, R: TypeList> EvolveBox<P, C, N<V, R>> {
 
                     // As the pointer data of `C` is now added to `P`, `calculate_layout`
                     // does not change its return value
-                    let mut pointer = pointer.cast::<V>();
+                    let mut pointer = pointer.cast();
                     ptr::write(pointer.as_mut(), next);
                     Ok(EvolveBox {
                         _marker: PhantomData,
@@ -217,78 +211,53 @@ impl<P: TypeList, C, V, R: TypeList> EvolveBox<P, C, N<V, R>> {
     }
 }
 
-impl<P: TypeList, C> EvolveBox<P, C, ()> {
-    /// An identity function only implemented if `N` is empty,
-    /// meaning that `C` is the final state.
-    ///
-    /// While this might seem quite useless at first, it does improve ergonomics
-    /// by helping the compiler with type resolution.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use evobox::EvolveBox;
-    /// let start = EvolveBox::new(7u32);
-    /// // as there could still be some next evolutions,
-    /// // we have to explicitly declare the type of `end`
-    /// let end: EvolveBox<_, _, ()> = start.evolve(|i| i + 1);
-    /// assert_eq!(end.as_ref(), &8);
-    ///
-    /// let start = EvolveBox::new(7u32);
-    /// let end = start.evolve(|i| i + 1).fin();
-    /// assert_eq!(end.as_ref(), &8);
-    ///
-    /// ```
-    pub fn fin(self) -> Self {
-        self
-    }
-}
-
-impl<P: TypeList, C, N: TypeList> AsRef<C> for EvolveBox<P, C, N> {
-    fn as_ref(&self) -> &C {
+impl<S: List<P>, P> AsRef<S::Value> for EvolveBox<S, P> {
+    fn as_ref(&self) -> &S::Value {
         self.deref()
     }
 }
 
-impl<P: TypeList, C, N: TypeList> AsMut<C> for EvolveBox<P, C, N> {
-    fn as_mut(&mut self) -> &mut C {
+impl<S: List<P>, P> AsMut<S::Value> for EvolveBox<S, P> {
+    fn as_mut(&mut self) -> &mut S::Value {
         self.deref_mut()
     }
 }
 
-impl<P: TypeList, C, N: TypeList> Deref for EvolveBox<P, C, N> {
-    type Target = C;
+impl<S: List<P>, P> Deref for EvolveBox<S, P> {
+    type Target = S::Value;
 
-    fn deref(&self) -> &C {
+    fn deref(&self) -> &S::Value {
         unsafe { self.current.as_ref() }
     }
 }
 
-impl<P: TypeList, C, N: TypeList> DerefMut for EvolveBox<P, C, N> {
-    fn deref_mut(&mut self) -> &mut C {
+impl<S: List<P>, P> DerefMut for EvolveBox<S, P> {
+    fn deref_mut(&mut self) -> &mut S::Value {
         unsafe { self.current.as_mut() }
     }
 }
 
-impl<P1: TypeList, P2: TypeList, C, O, N1: TypeList, N2: TypeList> PartialEq<EvolveBox<P2, O, N2>>
-    for EvolveBox<P1, C, N1>
+impl<S1: List<P1>, P1, S2: List<P2>, P2> PartialEq<EvolveBox<S2, P2>> for EvolveBox<S1, P1>
 where
-    C: PartialEq<O>,
+    S1::Value: PartialEq<S2::Value>,
 {
-    fn eq(&self, other: &EvolveBox<P2, O, N2>) -> bool {
+    fn eq(&self, other: &EvolveBox<S2, P2>) -> bool {
         self.deref() == other.deref()
     }
 }
 
-impl<P: TypeList, C, N: TypeList> Eq for EvolveBox<P, C, N> where C: Eq {}
+impl<S: List<P>, P> Eq for EvolveBox<S, P> where S::Value: Eq {}
 
-impl<P: TypeList, C: fmt::Debug, N: TypeList> fmt::Debug for EvolveBox<P, C, N> {
+impl<S: List<P>, P> fmt::Debug for EvolveBox<S, P>
+where
+    S::Value: fmt::Debug,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.deref().fmt(f)
     }
 }
 
-impl<P: TypeList, C, N: TypeList> Drop for EvolveBox<P, C, N> {
+impl<S: List<P>, P> Drop for EvolveBox<S, P> {
     fn drop(&mut self) {
         if let Some(layout) = Self::calculate_layout() {
             unsafe {
@@ -324,7 +293,7 @@ mod tests {
 
     #[test]
     fn simple() {
-        let mut t = EvolveBox::new(7).fin();
+        let mut t = EvolveBox::<L<u32>>::new(7);
         *t = 9;
         let r = t.as_mut();
         *r += 11;
@@ -339,7 +308,7 @@ mod tests {
         #[derive(Debug, PartialEq)]
         struct Bar;
 
-        let mut t = EvolveBox::new(Empty);
+        let mut t = EvolveBox::<L<Empty, L<Foo, L<Bar>>>>::new(Empty);
         *t = Empty;
 
         assert_eq!(
@@ -349,36 +318,34 @@ mod tests {
                 Foo
             })
             .evolve(|_| Bar)
-            .fin()
             .into_inner()
         );
     }
 
     #[test]
     fn evolve() {
-        let int_box = EvolveBox::new(7);
-        let str_box = int_box.evolve(|i| format!("{}", i)).fin();
+        let int_box = EvolveBox::<L<u32, L<String>>>::new(7);
+        let str_box = int_box.evolve(|i| format!("{}", i));
         assert_eq!(str_box.as_str(), "7");
     }
 
     #[test]
     fn double_free() {
-        let ddt = EvolveBox::new(DDT::default()).fin();
+        let ddt = EvolveBox::<L<DDT>>::new(DDT::default());
         ddt.into_inner();
     }
 
     #[test]
     fn sizes() {
-        let evo = EvolveBox::new(7u8);
+        let evo = EvolveBox::<L<u8, L<u16, L<u32, L<u64, L<u8, L<u16>>>>>>>::new(7);
         assert_eq!(
             7,
-            evo.evolve(u16::from)
-                .evolve(u32::from)
-                .evolve(u64::from)
-                .try_evolve(u8::try_from)
+            evo.evolve(From::from)
+                .evolve(From::from)
+                .evolve(From::from)
+                .try_evolve(TryFrom::try_from)
                 .unwrap()
-                .evolve(u16::from)
-                .fin()
+                .evolve(From::from)
                 .into_inner()
         );
     }
