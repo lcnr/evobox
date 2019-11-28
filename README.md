@@ -4,7 +4,7 @@ A pointer type which allows for safe transformations of its content without real
 This crate does not depend on the standard library, and can be used in `#![no_std]` contexts.
 It does however require the `alloc` crate.
 
-# Examples
+## Examples
 
 ```rust
 use evobox::{EvolveBox, L};
@@ -15,4 +15,4 @@ assert_eq!(owned.as_str(), "7");
 
 let seven = owned.try_evolve(|s| s.parse()).expect("invalid integer");
 assert_eq!(*seven, 7);
-/// ```
+```

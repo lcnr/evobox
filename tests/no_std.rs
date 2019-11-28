@@ -1,7 +1,7 @@
 #![no_std]
 extern crate evobox;
 
-use evobox::{L, EvolveBox};
+use evobox::{EvolveBox, L};
 
 fn main() {
     let b: EvolveBox<L<u32, ()>> = EvolveBox::new(7);

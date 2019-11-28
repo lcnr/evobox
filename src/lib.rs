@@ -129,6 +129,8 @@ pub struct L<E, C = ()> {
 ///
 /// # Examples
 ///
+/// Using `EvolveBox` inside of a function.
+///
 /// ```rust
 /// use evobox::{EvolveBox, L};
 ///
@@ -138,6 +140,81 @@ pub struct L<E, C = ()> {
 ///
 /// let seven = owned.try_evolve(|s| s.parse()).expect("invalid integer");
 /// assert_eq!(*seven, 7);
+/// ```
+///
+/// Storing it in a generic struct.
+///
+/// ```rust
+/// use evobox::{EvolveBox, List, L};
+///
+/// enum Ty {
+///     Integer,
+///     String,
+///     Boolean,
+/// }
+///
+/// #[derive(Debug)]
+/// struct TypeError;
+///
+/// struct Variable<'a, N, T>
+/// where
+///     L<&'a str, L<usize>>: List<N>,
+///     L<&'a str, L<Ty>>: List<T>,
+/// {
+///     name: EvolveBox<L<&'a str, L<usize>>, N>,
+///     ty: EvolveBox<L<&'a str, L<Ty>>, T>,
+/// }
+///
+/// impl<'a> Variable<'a, (), ()> {
+///     fn new(name: &'a str, ty: &'a str) -> Self {
+///         Self {
+///             name: EvolveBox::new(name),
+///             ty: EvolveBox::new(ty),
+///         }
+///     }
+/// }
+///
+/// impl<'a, T> Variable<'a, (), T>
+/// where
+///     L<&'a str, L<Ty>>: List<T>,
+/// {
+///     fn resolve_names(self, names: &mut Vec<&'a str>) -> Variable<'a, L<()>, T> {
+///         let id = names.len();
+///         let name = self.name.evolve(|name| {
+///             names.push(name);
+///             id
+///         });
+///
+///         Variable { name, ty: self.ty }
+///     }
+/// }
+///
+/// impl<'a, N> Variable<'a, N, ()>
+/// where
+///     L<&'a str, L<usize>>: List<N>,
+/// {
+///     fn resolve_types(self) -> Result<Variable<'a, N, L<()>>, TypeError> {
+///         let ty = self.ty.try_evolve(|ty|
+///             match ty {
+///                 "int" => Ok(Ty::Integer),
+///                 "string" => Ok(Ty::String),
+///                 "bool" => Ok(Ty::Boolean),
+///                 _ => Err(TypeError)
+///             }
+///         )?;
+///
+///         Ok(Variable { name: self.name, ty })
+///     }
+/// }
+///
+/// let a = Variable::new("a", "int");
+/// let b = Variable::new("b", "string");
+///
+/// let mut names = Vec::new();
+/// let a = a.resolve_names(&mut names);
+/// let _ = a.resolve_types().expect("unknown type");
+/// let b = b.resolve_types().expect("unknown type");
+/// let _ = b.resolve_names(&mut names);
 /// ```
 /// [`Box`]: https://doc.rust-lang.org/std/boxed/struct.Box.html
 /// [untagged union]: https://doc.rust-lang.org/std/keyword.union.html
