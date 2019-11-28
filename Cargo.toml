@@ -3,7 +3,9 @@ name = "evobox"
 version = "0.1.0"
 authors = ["lcnr/Bastian Kauschke <bastian_kauschke@hotmail.de>"]
 edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
+repository = "https://github.com/lcnr/evobox"
+categories = ["data-structures", "memory-management", "no-std"]
+license = "MIT"
+keywords = ["heap", "map", "transform", "box"]
+readme = "README.md"
+description = "A pointer type which allows for safe transformations of its content without reallocation."

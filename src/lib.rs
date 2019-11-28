@@ -1,4 +1,10 @@
-//! T
+//! A pointer type which allows for safe transformations of its content without reallocation.
+//! This crate does notdepend on the standard library, and can be used in `#![no_std]` contexts.
+//! It does however require the `alloc` crate.
+//!
+//! For more details look at the documentation of [`EvolveBox`].
+//!
+//! [`EvolveBox`]: ./struct.EvolveBox.html
 
 extern crate alloc;
 
@@ -13,21 +19,113 @@ use core::{
 
 use alloc::alloc::{self as a, Layout};
 
-pub mod traits;
+/// A trait used to calculate the size and alignment of an [`EvolveBox`].
+/// This trait is unsafe to implement as returning the wrong alignment or size
+/// for any type in the list can easily result in memory unsafety.
+///
+/// As this trait is already implemented for [`()`] and [`L`] there should be no need to
+/// implement this as a user of this crate.
+///
+/// [`EvolveBox`]: ./struct.EvolveBox.html
+/// [`()`]: https://doc.rust-lang.org/std/primitive.unit.html
+/// [`L`]: ./struct.L.html
+pub unsafe trait ListLayout {
+    fn size() -> usize;
+    fn align() -> usize;
+}
 
-use traits::List;
+unsafe impl ListLayout for () {
+    fn size() -> usize {
+        0
+    }
 
+    fn align() -> usize {
+        1
+    }
+}
+
+unsafe impl<E, C: ListLayout> ListLayout for L<E, C> {
+    fn size() -> usize {
+        mem::size_of::<E>().max(C::size())
+    }
+    fn align() -> usize {
+        mem::align_of::<E>().max(C::align())
+    }
+}
+
+/// A trait used to calculate the current type contained in the [`EvolveBox`] at compile time,
+/// meaning that there should not be a runtime cost when using an [`EvolveBox`].
+///
+/// This trait is an implementation detail of this crate and can be mostly ignored.
+///
+/// # Examples
+///
+/// ```
+/// use evobox::{L, List};
+///
+/// fn element_types(value: &L<u8, L<u16, L<u32>>>) {
+///     fn first(_: &impl List<(), Value = u8>) {}
+///     first(value);
+///
+///     fn second(_: &impl List<L<()>, Value = u16>) {}
+///     second(value);
+///
+///     fn third(_: &impl List<L<L<()>>, Value = u32>) {}
+///     third(value);
+/// }
+/// ```
+///
+/// [`EvolveBox`]: ./struct.EvolveBox.html
+pub trait List<V>: ListLayout {
+    type Value;
+}
+
+impl<E, C: ListLayout> List<()> for L<E, C> {
+    type Value = E;
+}
+
+impl<E, B, C: List<B>> List<L<B>> for L<E, C> {
+    type Value = C::Value;
+}
+
+/// A singly linked list containing types, indexed by itself using the [`List`] trait and
+/// used by [`EvolveBox`] to store all possible types.
+///
+/// For examples of its actual usage please look at the documentation for the [`EvolveBox`].
+///
+/// # Examples
+///
+/// ```
+/// use evobox::{L, List};
+///
+/// fn element_types(value: &L<u8, L<u16, L<u32>>>) {
+///     fn first(_: &impl List<(), Value = u8>) {}
+///     first(value);
+///
+///     fn second(_: &impl List<L<()>, Value = u16>) {}
+///     second(value);
+///
+///     fn third(_: &impl List<L<L<()>>, Value = u32>) {}
+///     third(value);
+/// }
+/// ```
+/// [`EvolveBox`]: ./struct.EvolveBox.html
+/// [`List`]: ./trait.List.html
 pub struct L<E, C = ()> {
     _marker: PhantomData<fn(E, C)>,
 }
 
 /// A pointer type which allows for safe transformations of its content without reallocation.
 ///
-/// An `EvolveBox` has the same size as a `Box` and has exactly
-/// the same size and alignment on the heap as its largest possible variant.
+/// An `EvolveBox` has the same size as a [`Box`] and has the smallest size and alignment on the heap needed
+/// to store its largest possible variant.
 ///
-/// The size and alignment of the allocated memory are required for deallocation.
-/// This information is stored in the type `S`, which is a list of all used types.
+/// Therefore `EvolveBox` should be a zero cost abstraction,
+/// meaning that there should be no runtime difference between a [`Box`] pointing at an [untagged union] and an `EvolveBox`,
+/// while using an `EvolveBox` is also safe.
+///
+/// The size and alignment of the allocated memory is stored in the type `S`, which is a list of all used types,  
+/// as it is required for deallocation.
 ///
 /// # Examples
 ///
@@ -41,6 +139,8 @@ pub struct L<E, C = ()> {
 /// let seven = owned.try_evolve(|s| s.parse()).expect("invalid integer");
 /// assert_eq!(*seven, 7);
 /// ```
+/// [`Box`]: https://doc.rust-lang.org/std/boxed/struct.Box.html
+/// [untagged union]: https://doc.rust-lang.org/std/keyword.union.html
 pub struct EvolveBox<S: List<P>, P = ()> {
     _marker: PhantomData<fn(S, P)>,
     current: NonNull<S::Value>,
