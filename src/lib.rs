@@ -1,5 +1,5 @@
 //! A pointer type which allows for safe transformations of its content without reallocation.
-//! This crate does notdepend on the standard library, and can be used in `#![no_std]` contexts.
+//! This crate does not depend on the standard library, and can be used in `#![no_std]` contexts.
 //! It does however require the `alloc` crate.
 //!
 //! For more details look at the documentation of [`EvolveBox`].
@@ -20,7 +20,7 @@ use core::{
 use alloc::alloc::{self as a, Layout};
 
 /// A trait used to calculate the size and alignment of an [`EvolveBox`].
-/// This trait is unsafe to implement as returning the wrong alignment or size
+/// This trait is unsafe to implement, as returning the wrong alignment or size
 /// for any type in the list can easily result in memory unsafety.
 ///
 /// As this trait is already implemented for [`()`] and [`L`] there should be no need to
