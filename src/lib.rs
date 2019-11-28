@@ -366,10 +366,7 @@ impl<S: List<P>, P> EvolveBox<S, P> {
             match f(value) {
                 Ok(next) => {
                     // SAFETY: thanks to `calculate_layout` the pointer must
-                    // support the type `V` as well. So this case is safe
-
-                    // As the pointer data of `C` is now added to `P`, `calculate_layout`
-                    // does not change its return value
+                    // support the type `V` as well. So this cast is safe
                     let mut pointer = pointer.cast();
                     ptr::write(pointer.as_mut(), next);
                     Ok(EvolveBox {
